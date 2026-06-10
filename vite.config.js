@@ -21,7 +21,7 @@ export default defineConfig({
   base: "./",
   plugins: [stripRedirectPlugin(), svelte()],
   build: {
-    outDir: "dist",
+    outDir: "docs",
     assetsDir: "assets",
   },
 });

@@ -5,7 +5,7 @@ default: build
 install:
     npm install
 
-# Build to static HTML in dist/
+# Build to static HTML in docs/
 build: install
     npx vite build
 
@@ -19,8 +19,8 @@ preview:
 
 # Clean build artifacts
 clean:
-    rm -rf dist node_modules
+    rm -rf docs dist node_modules
 
 # Open the built index.html directly
 open:
-    xdg-open dist/index.html || open dist/index.html
+    xdg-open docs/index.html || open docs/index.html
