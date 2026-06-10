@@ -140,16 +140,49 @@ function winningColor(s, ti) {
   if (winner === "tie") winner = "green";
   return winner;
 }
+/* ---- end-of-game ranking with full tiebreakers ----
+   Faction: most territories won → most axe stones → most flag stones.
+   Player: most winning-faction stones in hand → fewest losing-faction stones
+   → turn order starting from the seat after the player who ended the game.
+   "Losing faction" = worst-ranked faction by the same (terr, axe, flag) order
+   (deterministic faction-index fallback if the bottom is fully tied). */
+function factionStats(s) {
+  const terr = { red: 0, skyblue: 0, black: 0 };
+  for (let i = 0; i < T; i++) {
+    const w = winningColor(s, i);
+    if (w !== "green") terr[w] = (terr[w] || 0) + 1;
+  }
+  return FACTIONS.map(f => ({ f, terr: terr[f] || 0, axe: countOf(s.axe, f), flag: countOf(s.flag, f) }));
+}
+function cmpFaction(a, b) { return b.terr - a.terr || b.axe - a.axe || b.flag - a.flag; }
 function winningFaction(s) {
-  return winningColorFrom(Array.from({ length: T }, (_, i) => winningColor(s, i)));
+  const st = factionStats(s).sort(cmpFaction); // stable sort: index fallback
+  if (cmpFaction(st[0], st[1]) === 0) return "tie";
+  return st[0].f;
 }
-function winningPlayers(s) {
+function losingFaction(s) {
+  const st = factionStats(s).sort(cmpFaction);
+  return st[st.length - 1].f;
+}
+function winningPlayerDetailed(s) {
   const f = winningFaction(s);
-  if (f === "tie" || f === "green") return [];
-  const counts = s.hands.map(h => countOf(h, f));
-  const max = Math.max(...counts);
-  return counts.map((c, i) => c === max ? i : -1).filter(i => i >= 0);
+  if (f === "tie") return { player: -1, via: "dead tie between factions" };
+  let cands = Array.from({ length: s.player_count }, (_, i) => i);
+  const maxW = Math.max(...cands.map(i => countOf(s.hands[i], f)));
+  cands = cands.filter(i => countOf(s.hands[i], f) === maxW);
+  if (cands.length === 1) return { player: cands[0], via: "most backers of the winning faction" };
+  const lf = losingFaction(s);
+  const minL = Math.min(...cands.map(i => countOf(s.hands[i], lf)));
+  cands = cands.filter(i => countOf(s.hands[i], lf) === minL);
+  if (cands.length === 1) return { player: cands[0], via: `fewest ${FACTION_NAMES[lf]} (losing faction) stones` };
+  const start = (s.active_player + 1) % s.player_count;
+  for (let k = 0; k < s.player_count; k++) {
+    const p = (start + k) % s.player_count;
+    if (cands.includes(p)) return { player: p, via: "turn order after the final negotiation" };
+  }
+  return { player: cands[0], via: "fallback" };
 }
+function winningPlayer(s) { return winningPlayerDetailed(s).player; }
 function applyMove(s, m) {
   const p = s.active_player;
   const hand = s.hands[p];
@@ -162,7 +195,8 @@ function applyMove(s, m) {
     s.negotiate_count++;
     desc = `Player ${p + 1} negotiates: swaps ${FACTION_NAMES[m.sacrifice]} for ${FACTION_NAMES[drawn]}`;
   } else if (m.type === "Pass") {
-    desc = `Player ${p + 1} has no legal moves and passes`;
+    s.negotiate_count++; // a forced pass counts as a negotiation for game-end
+    desc = `Player ${p + 1} has no legal moves and passes (counts as a negotiation)`;
   } else {
     s.negotiate_count = 0;
     if (m.type === "Recruit") {
@@ -212,9 +246,9 @@ function evaluate(s) {
 }
 function scoreState(s) {
   if (!s.game_over) return evaluate(s);
-  const winners = winningPlayers(s);
-  if (winners.length === 0) return s.hands.map(() => 0.25);
-  return s.hands.map((_, i) => winners.includes(i) ? 1 : 0);
+  const w = winningPlayer(s);
+  if (w < 0) return s.hands.map(() => 0.25);
+  return s.hands.map((_, i) => i === w ? 1 : 0);
 }
 
 /* ============================================================================
@@ -460,12 +494,12 @@ function renderAnalysis(hist) {
 
   /* ---- verdict ---- */
   const faction = winningFaction(finalState);
-  const winners = winningPlayers(finalState);
+  const { player: winner, via } = winningPlayerDetailed(finalState);
   const finished = finalState.game_over;
   const winnerText = !finished ? "Game unfinished"
-    : (faction === "tie" || faction === "green") ? "No one wins"
-    : winners.length === 1 ? `${pname(winners[0])} wins`
-    : `Tie: ${winners.map(i => "Player " + (i + 1)).join(" & ")}`;
+    : winner < 0 ? "No one wins"
+    : `${pname(winner)} wins`;
+  const viaText = finished && winner >= 0 ? ` · decided by ${via}` : "";
   const swatch = h("div", { class: "swatch" });
   swatch.style.background = FACTION_COLORS[faction] || "#5d9b6c";
 
@@ -477,7 +511,7 @@ function renderAnalysis(hist) {
   // turning point: largest single-move drop in the eventual winner's share
   // (or largest swing overall if no single winner)
   let swingStep = 0, swingMag = 0;
-  const focus = winners.length === 1 ? winners[0] : null;
+  const focus = winner >= 0 && finished ? winner : null;
   for (let i = 1; i < N; i++) {
     const mag = focus !== null
       ? frames[i].scores[focus] - frames[i - 1].scores[focus]
@@ -563,7 +597,7 @@ function renderAnalysis(hist) {
       h("div", {},
         h("div", { class: "big" }, winnerText),
         h("div", { class: "small" },
-          `Winning faction: ${FACTION_NAMES[faction] || faction} · ${N - 1} moves · ` +
+          `Winning faction: ${FACTION_NAMES[faction] || faction}${viaText} · ${N - 1} moves · ` +
           `${recruits} recruits, ${battles} battles, ${marches} marches, ${negotiates} negotiations`)))),
 
     h("div", { class: "section" },
