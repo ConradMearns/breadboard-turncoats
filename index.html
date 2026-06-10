@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Turncoats</title>
     <script id="file-redirect">
-      // When opened directly (file://), redirect to the built output
-      if (window.location.protocol === 'file:') {
-        window.location.replace('docs/index.html');
+      // When opened directly or served from repo root, redirect to the built output.
+      // Skip on localhost so Vite dev still works.
+      if (!location.pathname.includes('/docs/') && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+        location.replace('docs/index.html');
       }
     </script>
   </head>
