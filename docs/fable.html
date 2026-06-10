@@ -336,15 +336,22 @@ function moveKey(m) {
   }
 }
 
-/* ---- apply (mutates s, advances the turn, returns a description) ---- */
+/* ---- apply (mutates s, advances the turn) ----
+   Returns {desc, drawn}. For Negotiate: if m.drawn is supplied (replay, or a
+   human who pre-saw the draw) that exact stone is removed from the bag;
+   otherwise the draw is a chance event resolved here. The chosen stone is
+   returned so the real game can record it for deterministic replay — move
+   objects are never mutated (MCTS reuses them across simulations). */
 function applyMove(s, m) {
   const p = s.active_player;
   const hand = s.hands[p];
   let desc = "";
+  let drawnOut;
   if (m.type === "Negotiate") {
-    // m.drawn may be supplied (human UI pre-draws so the player can see it);
-    // otherwise this is a chance event resolved now.
-    const drawn = m.drawn !== undefined ? m.drawn : drawRandom(s.bag);
+    const drawn = m.drawn !== undefined
+      ? (removeOne(s.bag, m.drawn), m.drawn)
+      : drawRandom(s.bag);
+    drawnOut = drawn;
     s.bag.push(m.sacrifice);
     removeOne(hand, m.sacrifice);
     hand.push(drawn);
@@ -387,7 +394,7 @@ function applyMove(s, m) {
     s.turn_count++;
     s.active_player = (s.active_player + 1) % s.player_count;
   }
-  return desc;
+  return { desc, drawn: drawnOut };
 }
 
 /* ---- evaluation: per-player scores in [0,1], comparable to terminal payoffs.
@@ -556,6 +563,66 @@ const BOTS = {
 };
 
 /* ============================================================================
+   PART 2.5 — GAME HISTORY SERIALIZATION (base64url bitstream)
+   A finished game is fully determined by: player count, seat types, the
+   initial deal (stones in normal territories + hands; home territories and
+   the bag are derivable), and the move list (with Negotiate draws recorded).
+   Layout (bits): version(4) | players-2(2) | seatType(3)×P |
+     deal stone(2)×(16+8P) | moveCount(10) | moves…
+   Move: type(3) then Recruit f(2)t(4) | March f(2)from(4)to(4)amt(5) |
+     Battle f(2)t(4)target(2)amt(5) | Negotiate sac(2)drawn(2) | Pass —
+   ========================================================================= */
+const ENC_VERSION = 1;
+const SEAT_KEYS = ["human", "random", "greedy", "mcts", "ismcts"];
+const MOVE_CODES = { Recruit: 0, March: 1, Battle: 2, Negotiate: 3, Pass: 4 };
+const MOVE_TYPES = ["Recruit", "March", "Battle", "Negotiate", "Pass"];
+const fIdx = f => FACTIONS.indexOf(f);
+
+class BitWriter {
+  constructor() { this.bits = []; }
+  write(val, n) { for (let i = n - 1; i >= 0; i--) this.bits.push((val >> i) & 1); }
+  toBase64url() {
+    const bytes = [];
+    for (let i = 0; i < this.bits.length; i += 8) {
+      let b = 0;
+      for (let j = 0; j < 8; j++) b = (b << 1) | (this.bits[i + j] || 0);
+      bytes.push(b);
+    }
+    return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+}
+
+function encodeHistory(hist) {
+  const w = new BitWriter();
+  const P = hist.playerCount;
+  w.write(ENC_VERSION, 4);
+  w.write(P - 2, 2);
+  for (let i = 0; i < P; i++) w.write(Math.max(0, SEAT_KEYS.indexOf(hist.playerTypes[i])), 3);
+  for (const f of hist.deal) w.write(fIdx(f), 2);
+  w.write(hist.moves.length, 10);
+  for (const m of hist.moves) {
+    w.write(MOVE_CODES[m.type], 3);
+    if (m.type === "Recruit") { w.write(fIdx(m.faction), 2); w.write(m.territory, 4); }
+    else if (m.type === "March") { w.write(fIdx(m.faction), 2); w.write(m.from, 4); w.write(m.to, 4); w.write(m.amount, 5); }
+    else if (m.type === "Battle") { w.write(fIdx(m.faction), 2); w.write(m.territory, 4); w.write(fIdx(m.target), 2); w.write(m.amount, 5); }
+    else if (m.type === "Negotiate") { w.write(fIdx(m.sacrifice), 2); w.write(fIdx(m.drawn), 2); }
+    /* Pass: no fields */
+  }
+  return w.toBase64url();
+}
+
+/* Capture the initial deal in canonical order: for each non-home territory
+   its 2 stones (territory order), then each player's 8 stones (seat order).
+   Must be called immediately after newGame(), before any moves. */
+function dealFromState(s) {
+  const deal = [];
+  for (let i = 0; i < T; i++)
+    if (BOARD.cells[i].type === TerritoryType.Normal) deal.push(...s.territories[i]);
+  for (const hand of s.hands) deal.push(...hand);
+  return deal;
+}
+
+/* ============================================================================
    PART 3 — UI / APP
    ========================================================================= */
 
@@ -566,6 +633,7 @@ const state = {
   playerTypes: ["human", "ismcts", "greedy", "greedy", "greedy"],
   action: null,            // human guided-action state machine
   log: [],
+  history: null,           // { playerCount, playerTypes, deal, moves } for sharing
   botBusy: false,
   botIters: 0,
 };
@@ -612,14 +680,24 @@ function actionToMove(a) {
 }
 
 function resolveHumanAction() {
-  const move = actionToMove(state.action);
+  const a = state.action;
+  const move = actionToMove(a);
+  // The human pre-drew the Negotiate stone (so they could see it before
+  // choosing). applyMove removes supplied draws from the bag itself, so put
+  // it back first — net effect is identical, and replay stays deterministic.
+  if (a.type === "Negotiate") G.bag.push(a.drawn);
   state.action = null;
   commitMove(move);
 }
 
 /* Single funnel for committing any move (human or bot) to the real game */
 function commitMove(move) {
-  const desc = applyMove(G, move);
+  const { desc, drawn } = applyMove(G, move);
+  if (state.history) {
+    const rec = { ...move };
+    if (move.type === "Negotiate") rec.drawn = drawn; // record the chance outcome
+    state.history.moves.push(rec);
+  }
   pushLog(desc);
   if (G.game_over) {
     state.phase = "gameover";
@@ -1028,6 +1106,12 @@ function renderSetup() {
           h("div", { class: "mc-desc" }, "Debug view: every hand and the full bag are visible — including bot hands while they think.")))),
     h("button", { class: "start-btn", onclick: () => {
         G = newGame(state.playerCount);
+        state.history = {
+          playerCount: state.playerCount,
+          playerTypes: state.playerTypes.slice(0, state.playerCount),
+          deal: dealFromState(G),
+          moves: [],
+        };
         state.action = null;
         state.log = [];
         state.botBusy = false;
@@ -1056,12 +1140,34 @@ function renderGameOver() {
     : `Tie between ${winners.map(i => "Player " + (i + 1)).join(" & ")}`;
   const swatch = h("div", { class: "swatch" });
   swatch.style.background = FACTION_COLORS[faction] || "#5d9b6c";
+
+  const code = state.history ? encodeHistory(state.history) : null;
+  const extras = [];
+  if (code) {
+    const analysisURL = `turncoats-replay.html?g=${code}`;
+    extras.push(h("a", { href: analysisURL, style: "text-decoration:none" },
+      h("button", {}, "View Game Analysis →")));
+    const copyBtn = h("button", { class: "reset-link", onclick: () => {
+        const link = new URL(analysisURL, location.href).href;
+        const finish = ok => { copyBtn.textContent = ok ? "Copied!" : "Copy failed — code shown below"; };
+        if (navigator.clipboard && navigator.clipboard.writeText)
+          navigator.clipboard.writeText(link).then(() => finish(true), () => finish(false));
+        else finish(false);
+        codeBox.style.display = "block";
+      } }, "Copy share link");
+    const codeBox = h("textarea", { readonly: "readonly",
+      style: "display:none;width:100%;max-width:320px;height:64px;background:var(--panel);color:var(--bone-dim);border:1px solid var(--line);border-radius:6px;font-size:10px;padding:6px;font-family:monospace" });
+    codeBox.value = code;
+    extras.push(copyBtn, codeBox);
+  }
+
   screen.replaceChildren(h("div", { class: "overlay" },
     h("div", { class: "big" }, "Game Over"),
     swatch,
     h("div", { class: "sub" },
       `Winning faction: ${FACTION_NAMES[faction] || faction}. ${winnerText} ` +
       `(Backers are counted by stones of the winning faction left in hand.)`),
+    ...extras,
     h("button", { onclick: () => { state.phase = "setup"; render(); } }, "New Game"),
   ));
 }

@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Turncoats — Game Analysis</title>
+<style>
+  :root {
+    --felt: #1f2a24; --felt-deep: #16201b;
+    --bone: #f0e7d3; --bone-dim: #c9bfa8; --ink: #14110c;
+    --gold: #e8b54a; --panel: #2a3830; --line: #3d4f45;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body { background: var(--felt-deep); color: var(--bone);
+    font-family: Georgia, 'Times New Roman', serif; display: flex; justify-content: center; }
+  #app { width: 100%; max-width: 720px; min-height: 100%; background: var(--felt);
+    box-shadow: 0 0 60px rgba(0,0,0,.6); padding-bottom: 30px; }
+  header { padding: 16px 18px 12px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  header h1 { font-size: 20px; letter-spacing: .3em; text-transform: uppercase; font-weight: normal; }
+  header h1 .coat { color: #d6453c; }
+  header .sub { font-size: 12px; color: var(--bone-dim); letter-spacing: .1em; text-transform: uppercase; }
+  .section { padding: 16px 18px 0; }
+  .section h2 { font-size: 12px; letter-spacing: .2em; text-transform: uppercase;
+    color: var(--bone-dim); margin-bottom: 10px; font-weight: normal; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; }
+  svg { display: block; width: 100%; height: auto; }
+  .verdict { display: flex; align-items: center; gap: 14px; }
+  .verdict .swatch { width: 44px; height: 44px; border-radius: 50%; border: 3px solid var(--bone); flex: none; }
+  .verdict .big { font-size: 19px; }
+  .verdict .small { font-size: 13px; color: var(--bone-dim); margin-top: 2px; line-height: 1.45; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 12.5px; color: var(--bone-dim); }
+  .legend .key { display: flex; align-items: center; gap: 6px; }
+  .legend .dot { width: 12px; height: 12px; border-radius: 3px; }
+  .scrub-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+  input[type=range] { flex: 1; accent-color: var(--gold); }
+  .step-label { font-size: 13px; min-width: 88px; text-align: right; color: var(--bone-dim); }
+  .step-detail { margin-top: 10px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .step-detail .board { flex: 1 1 220px; max-width: 300px; }
+  .step-detail .facts { flex: 1 1 220px; font-size: 13.5px; line-height: 1.6; }
+  .facts .move-desc { color: var(--bone); margin-bottom: 8px; min-height: 38px; }
+  .bar-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; font-size: 12.5px; }
+  .bar-row .name { width: 110px; color: var(--bone-dim); flex: none; }
+  .bar-row .bar-bg { flex: 1; height: 12px; background: var(--felt-deep); border-radius: 3px; overflow: hidden; }
+  .bar-row .bar { height: 100%; }
+  .bar-row .pct { width: 44px; text-align: right; color: var(--bone-dim); flex: none; }
+  .stat-grid { display: flex; gap: 10px; flex-wrap: wrap; }
+  .stat { flex: 1 1 130px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 10px 12px; }
+  .stat .v { font-size: 21px; }
+  .stat .k { font-size: 10.5px; letter-spacing: .15em; text-transform: uppercase; color: var(--bone-dim); margin-top: 2px; }
+  .movelist { font-size: 12.5px; line-height: 1.7; color: var(--bone-dim); max-height: 260px; overflow-y: auto; }
+  .movelist .row { display: flex; gap: 8px; cursor: pointer; padding: 0 4px; border-radius: 3px; }
+  .movelist .row:hover { background: rgba(232,181,74,.12); }
+  .movelist .row.cur { background: rgba(232,181,74,.22); color: var(--bone); }
+  .movelist .n { width: 34px; flex: none; text-align: right; opacity: .7; }
+  .movelist .ldr { width: 14px; height: 14px; border-radius: 50%; flex: none; align-self: center; }
+  .paste { display: flex; flex-direction: column; gap: 12px; padding: 40px 24px; }
+  .paste textarea { width: 100%; height: 110px; background: var(--panel); color: var(--bone);
+    border: 1px solid var(--line); border-radius: 6px; padding: 10px; font-family: monospace; font-size: 12px; }
+  .paste button { padding: 14px; font-size: 14px; letter-spacing: .2em; text-transform: uppercase;
+    font-family: inherit; background: var(--gold); color: var(--ink); border: none; border-radius: 6px; cursor: pointer; }
+  .err { color: #d6453c; font-size: 13.5px; }
+  a.back { color: var(--bone-dim); font-size: 12px; }
+  text.tnum { font-family: Georgia, serif; font-size: 15px; fill: #8a8170; }
+  text.axis { font-family: Georgia, serif; font-size: 11px; fill: #8a8170; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Turn<span class="coat">coats</span></h1>
+    <div class="sub">Game Analysis</div>
+  </header>
+  <div id="content"></div>
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================================
+   PURE GAME CORE — must match the rules in turncoats.html exactly.
+   (Duplicated so this page is a standalone file; if rules change there,
+   change them here too — or extract a shared turncoats-core.js later.)
+   ========================================================================= */
+const TerritoryType = { Normal: "transparent", Red: "red", Blue: "skyblue", Black: "black" };
+const FACTIONS = ["red", "skyblue", "black"];
+const FACTION_COLORS = { red: "#d6453c", skyblue: "#6fb7d6", black: "#2b2b30", green: "#5d9b6c" };
+const FACTION_NAMES = { red: "Red", skyblue: "Blue", black: "Black", green: "Neutral", tie: "Tie" };
+const BOARD = {
+  cells: [
+    { row: 0, col: 1, type: TerritoryType.Normal },
+    { row: 0, col: 2, type: TerritoryType.Normal },
+    { row: 0, col: 3, type: TerritoryType.Red },
+    { row: 1, col: 0, type: TerritoryType.Normal },
+    { row: 1, col: 1, type: TerritoryType.Normal },
+    { row: 1, col: 3, type: TerritoryType.Normal },
+    { row: 2, col: 1, type: TerritoryType.Blue },
+    { row: 2, col: 2, type: TerritoryType.Normal },
+    { row: 2, col: 3, type: TerritoryType.Normal },
+    { row: 2, col: 4, type: TerritoryType.Normal },
+    { row: 3, col: 3, type: TerritoryType.Black },
+  ],
+  graph: {
+    0: [1, 3, 4], 1: [2, 4], 2: [1, 5], 3: [0, 4, 6], 4: [0, 1, 3, 6, 7],
+    5: [2, 8, 9], 6: [3, 4, 7], 7: [4, 6, 8], 8: [7, 5, 9, 10], 9: [5, 8, 10], 10: [8, 9],
+  },
+};
+const T = BOARD.cells.length;
+
+function removeOne(arr, v) { const i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); }
+function countOf(arr, v) { let n = 0; for (const x of arr) if (x === v) n++; return n; }
+function drawRandom(arr) { return arr.splice(Math.floor(Math.random() * arr.length), 1)[0]; }
+
+function cloneState(s) {
+  return {
+    player_count: s.player_count, active_player: s.active_player,
+    turn_count: s.turn_count, negotiate_count: s.negotiate_count, game_over: s.game_over,
+    bag: s.bag.slice(), territories: s.territories.map(t => t.slice()),
+    hands: s.hands.map(h => h.slice()), flag: s.flag.slice(), axe: s.axe.slice(),
+  };
+}
+function winningColorFrom(arr) {
+  const count = {}; let maxCount = 0; let winner = "tie";
+  for (const piece of arr) {
+    count[piece] = (count[piece] || 0) + 1;
+    if (count[piece] > maxCount) { maxCount = count[piece]; winner = piece; }
+    else if (count[piece] === maxCount) { winner = "tie"; }
+  }
+  return winner;
+}
+function winningColor(s, ti) {
+  const pieces = s.territories[ti];
+  let winner = winningColorFrom(pieces);
+  const axeW = winningColorFrom(s.axe);
+  const flagW = winningColorFrom(s.flag);
+  if (winner === "tie" && pieces.includes(axeW)) winner = axeW;
+  if (winner === "tie" && pieces.includes(flagW)) winner = flagW;
+  if (winner === "tie") winner = "green";
+  return winner;
+}
+function winningFaction(s) {
+  return winningColorFrom(Array.from({ length: T }, (_, i) => winningColor(s, i)));
+}
+function winningPlayers(s) {
+  const f = winningFaction(s);
+  if (f === "tie" || f === "green") return [];
+  const counts = s.hands.map(h => countOf(h, f));
+  const max = Math.max(...counts);
+  return counts.map((c, i) => c === max ? i : -1).filter(i => i >= 0);
+}
+function applyMove(s, m) {
+  const p = s.active_player;
+  const hand = s.hands[p];
+  let desc = "";
+  if (m.type === "Negotiate") {
+    const drawn = m.drawn !== undefined ? (removeOne(s.bag, m.drawn), m.drawn) : drawRandom(s.bag);
+    s.bag.push(m.sacrifice);
+    removeOne(hand, m.sacrifice);
+    hand.push(drawn);
+    s.negotiate_count++;
+    desc = `Player ${p + 1} negotiates: swaps ${FACTION_NAMES[m.sacrifice]} for ${FACTION_NAMES[drawn]}`;
+  } else if (m.type === "Pass") {
+    desc = `Player ${p + 1} has no legal moves and passes`;
+  } else {
+    s.negotiate_count = 0;
+    if (m.type === "Recruit") {
+      removeOne(hand, m.faction);
+      s.territories[m.territory].push(m.faction);
+      desc = `Player ${p + 1} recruits ${FACTION_NAMES[m.faction]} to territory ${m.territory}`;
+    } else if (m.type === "March") {
+      removeOne(hand, m.faction);
+      s.flag.push(m.faction);
+      for (let i = 0; i < m.amount; i++) {
+        removeOne(s.territories[m.from], m.faction);
+        s.territories[m.to].push(m.faction);
+      }
+      desc = `Player ${p + 1} marches ${m.amount} ${FACTION_NAMES[m.faction]} ${m.from} → ${m.to}`;
+    } else if (m.type === "Battle") {
+      removeOne(hand, m.faction);
+      s.axe.push(m.faction);
+      let removed = 0;
+      for (let i = 0; i < m.amount; i++) {
+        if (s.territories[m.territory].includes(m.target)) {
+          removeOne(s.territories[m.territory], m.target);
+          s.bag.push(m.target);
+          removed++;
+        }
+      }
+      desc = `Player ${p + 1} battles in ${m.territory}: ${FACTION_NAMES[m.faction]} removes ${removed} ${FACTION_NAMES[m.target]}`;
+    }
+  }
+  if (s.negotiate_count >= s.player_count) s.game_over = true;
+  else { s.turn_count++; s.active_player = (s.active_player + 1) % s.player_count; }
+  return desc;
+}
+function evaluate(s) {
+  const terrWins = {};
+  for (let i = 0; i < T; i++) {
+    const w = winningColor(s, i);
+    if (w !== "green") terrWins[w] = (terrWins[w] || 0) + 1;
+  }
+  const raw = s.hands.map(h => {
+    let v = 0.001 * h.length;
+    for (const f of FACTIONS) v += countOf(h, f) * (terrWins[f] || 0);
+    return v;
+  });
+  const total = raw.reduce((a, b) => a + b, 0);
+  if (total <= 0) return raw.map(() => 1 / s.player_count);
+  return raw.map(v => v / total);
+}
+function scoreState(s) {
+  if (!s.game_over) return evaluate(s);
+  const winners = winningPlayers(s);
+  if (winners.length === 0) return s.hands.map(() => 0.25);
+  return s.hands.map((_, i) => winners.includes(i) ? 1 : 0);
+}
+
+/* ============================================================================
+   DECODER — mirrors encodeHistory() in turncoats.html
+   ========================================================================= */
+const SEAT_KEYS = ["human", "random", "greedy", "mcts", "ismcts"];
+const SEAT_NAMES = { human: "Human", random: "Random", greedy: "Greedy", mcts: "MCTS*", ismcts: "ISMCTS" };
+const MOVE_TYPES = ["Recruit", "March", "Battle", "Negotiate", "Pass"];
+
+class BitReader {
+  constructor(b64url) {
+    const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(b64);
+    this.bits = [];
+    for (let i = 0; i < raw.length; i++) {
+      const byte = raw.charCodeAt(i);
+      for (let j = 7; j >= 0; j--) this.bits.push((byte >> j) & 1);
+    }
+    this.pos = 0;
+  }
+  read(n) {
+    let v = 0;
+    for (let i = 0; i < n; i++) {
+      if (this.pos >= this.bits.length) throw new Error("Unexpected end of data");
+      v = (v << 1) | this.bits[this.pos++];
+    }
+    return v;
+  }
+}
+
+function decodeHistory(code) {
+  const r = new BitReader(code.trim());
+  const version = r.read(4);
+  if (version !== 1) throw new Error("Unsupported encoding version " + version);
+  const playerCount = r.read(2) + 2;
+  const playerTypes = [];
+  for (let i = 0; i < playerCount; i++) playerTypes.push(SEAT_KEYS[r.read(3)] || "human");
+  const dealLen = 16 + 8 * playerCount;
+  const deal = [];
+  for (let i = 0; i < dealLen; i++) deal.push(FACTIONS[r.read(2)]);
+  const moveCount = r.read(10);
+  const moves = [];
+  for (let k = 0; k < moveCount; k++) {
+    const type = MOVE_TYPES[r.read(3)];
+    if (type === "Recruit") moves.push({ type, faction: FACTIONS[r.read(2)], territory: r.read(4) });
+    else if (type === "March") moves.push({ type, faction: FACTIONS[r.read(2)], from: r.read(4), to: r.read(4), amount: r.read(5) });
+    else if (type === "Battle") moves.push({ type, faction: FACTIONS[r.read(2)], territory: r.read(4), target: FACTIONS[r.read(2)], amount: r.read(5) });
+    else if (type === "Negotiate") moves.push({ type, sacrifice: FACTIONS[r.read(2)], drawn: FACTIONS[r.read(2)] });
+    else if (type === "Pass") moves.push({ type });
+    else throw new Error("Bad move type at move " + k);
+  }
+  return { playerCount, playerTypes, deal, moves };
+}
+
+/* Rebuild the exact initial state from the recorded deal. Home territories
+   are fixed; the bag is whatever remains of 21-per-color (order irrelevant —
+   every later draw is recorded in the move list). */
+function stateFromDeal(playerCount, deal) {
+  const s = {
+    player_count: playerCount, active_player: 0, turn_count: 0,
+    negotiate_count: 0, game_over: false,
+    bag: [], territories: BOARD.cells.map(() => []),
+    hands: Array.from(Array(playerCount), () => []), flag: [], axe: [],
+  };
+  const remaining = { red: 21, skyblue: 21, black: 21 };
+  let idx = 0;
+  const take = f => { remaining[f]--; return f; };
+  for (let i = 0; i < T; i++) {
+    const home = BOARD.cells[i].type;
+    for (let j = 0; j < 2; j++)
+      s.territories[i].push(take(home !== TerritoryType.Normal ? home : deal[idx++]));
+  }
+  for (const hand of s.hands)
+    for (let j = 0; j < 8; j++) hand.push(take(deal[idx++]));
+  for (const f of FACTIONS)
+    for (let i = 0; i < remaining[f]; i++) s.bag.push(f);
+  if (Object.values(remaining).some(n => n < 0)) throw new Error("Invalid deal: color overdrawn");
+  return s;
+}
+
+/* ============================================================================
+   ANALYSIS — replay and build per-step frames
+   ========================================================================= */
+const PLAYER_COLORS = ["#e8b54a", "#7c9ce0", "#b07cd6", "#e0865a", "#6fc2a0"];
+
+function buildFrames(hist) {
+  let s = stateFromDeal(hist.playerCount, hist.deal);
+  const frames = [{
+    state: cloneState(s), desc: "Initial deal", scores: scoreState(s),
+    terr: terrControl(s), bagLen: s.bag.length,
+  }];
+  for (const m of hist.moves) {
+    const desc = applyMove(s, m);
+    frames.push({
+      state: cloneState(s), desc, scores: scoreState(s),
+      terr: terrControl(s), bagLen: s.bag.length, move: m,
+    });
+  }
+  return { frames, finalState: s };
+}
+function terrControl(s) {
+  const c = { red: 0, skyblue: 0, black: 0, green: 0 };
+  for (let i = 0; i < T; i++) c[winningColor(s, i)]++;
+  return c;
+}
+function leaderOf(scores) {
+  let best = 0;
+  for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
+  // exact tie → no single leader
+  return scores.filter(v => v === scores[best]).length > 1 ? -1 : best;
+}
+
+/* ============================================================================
+   RENDERING
+   ========================================================================= */
+const SVGNS = "http://www.w3.org/2000/svg";
+function h(tag, attrs = {}, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "onclick") el.addEventListener("click", v);
+    else if (k === "oninput") el.addEventListener("input", v);
+    else if (k === "class") el.className = v;
+    else el.setAttribute(k, v);
+  }
+  for (const c of children.flat()) { if (c == null) continue; el.append(c.nodeType ? c : document.createTextNode(c)); }
+  return el;
+}
+function svgEl(tag, attrs = {}, ...children) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  for (const c of children.flat()) if (c != null) el.append(c.nodeType ? c : document.createTextNode(c));
+  return el;
+}
+
+/* Generic stacked-area chart: series = [{color, values[]}] stacked bottom-up,
+   values per step sum to <= 1. Returns {svg, setCursor(step)} */
+function stackedChart(series, steps, opts = {}) {
+  const W = 700, Hh = 220, padL = 34, padR = 8, padT = 8, padB = 22;
+  const plotW = W - padL - padR, plotH = Hh - padT - padB;
+  const X = i => padL + (steps <= 1 ? 0 : (i / (steps - 1)) * plotW);
+  const Y = v => padT + (1 - v) * plotH;
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${Hh}` });
+  svg.append(svgEl("rect", { x: 0, y: 0, width: W, height: Hh, fill: "#16201b", rx: 6 }));
+  // gridlines
+  for (const gy of [0, 0.25, 0.5, 0.75, 1]) {
+    svg.append(svgEl("line", { x1: padL, x2: W - padR, y1: Y(gy), y2: Y(gy), stroke: "#3d4f45", "stroke-width": gy === 0.5 ? 1.2 : 0.5, "stroke-dasharray": gy === 0.5 ? "" : "3,4" }));
+    svg.append(svgEl("text", { class: "axis", x: padL - 5, y: Y(gy) + 3, "text-anchor": "end" }, String(Math.round(gy * 100)) + "%"));
+  }
+  // stacked areas
+  const cum = Array(steps).fill(0);
+  for (const ser of series) {
+    const top = [], bottom = [];
+    for (let i = 0; i < steps; i++) {
+      bottom.push([X(i), Y(cum[i])]);
+      cum[i] += ser.values[i];
+      top.push([X(i), Y(cum[i])]);
+    }
+    const d = "M" + bottom.map(p => p.join(",")).join(" L") +
+      " L" + top.slice().reverse().map(p => p.join(",")).join(" L") + " Z";
+    svg.append(svgEl("path", { d, fill: ser.color, "fill-opacity": 0.78, stroke: ser.color, "stroke-width": 1 }));
+  }
+  // x labels
+  svg.append(svgEl("text", { class: "axis", x: padL, y: Hh - 7 }, "start"));
+  svg.append(svgEl("text", { class: "axis", x: W - padR, y: Hh - 7, "text-anchor": "end" }, `move ${steps - 1}`));
+  // cursor
+  const cursor = svgEl("line", { x1: X(0), x2: X(0), y1: padT, y2: padT + plotH, stroke: "#e8b54a", "stroke-width": 1.6 });
+  svg.append(cursor);
+  // click/drag to scrub
+  function stepFromEvent(ev) {
+    const rect = svg.getBoundingClientRect();
+    const fx = (ev.clientX - rect.left) / rect.width * W;
+    return Math.max(0, Math.min(steps - 1, Math.round((fx - padL) / plotW * (steps - 1))));
+  }
+  if (opts.onScrub) {
+    let down = false;
+    svg.style.cursor = "crosshair";
+    svg.addEventListener("pointerdown", ev => { down = true; opts.onScrub(stepFromEvent(ev)); });
+    svg.addEventListener("pointermove", ev => { if (down) opts.onScrub(stepFromEvent(ev)); });
+    addEventListener("pointerup", () => { down = false; });
+  }
+  return { svg, setCursor: i => { cursor.setAttribute("x1", X(i)); cursor.setAttribute("x2", X(i)); } };
+}
+
+/* compact board renderer for a given state */
+const HEX = 52, PADH = 10, SQ3 = Math.sqrt(3);
+function hexCX(c) { return 90 + (3 - c.row) * (HEX * 1.5 + PADH); }
+function hexCY(c) { return 95 + c.col * (HEX * SQ3 + PADH) + (c.row % 2) * (HEX * SQ3) / 2; }
+function flatHexPoints(x, y, s) {
+  return [
+    [x + s, y], [x + s / 2, y + (s * SQ3) / 2], [x - s / 2, y + (s * SQ3) / 2],
+    [x - s, y], [x - s / 2, y - (s * SQ3) / 2], [x + s / 2, y - (s * SQ3) / 2],
+  ].map(p => p.join(",")).join(" ");
+}
+function renderBoardSVG(s) {
+  const svg = svgEl("svg", { viewBox: "0 0 460 640" });
+  BOARD.cells.forEach((cell, i) => {
+    const cx = hexCX(cell), cy = hexCY(cell);
+    const g = svgEl("g", {});
+    g.append(svgEl("polygon", { points: flatHexPoints(cx, cy, HEX), fill: "#f0e7d3", stroke: "#3d4f45", "stroke-width": 2 }));
+    if (cell.type !== TerritoryType.Normal)
+      g.append(svgEl("polygon", { points: flatHexPoints(cx, cy, HEX - 1), fill: "transparent", stroke: FACTION_COLORS[cell.type], "stroke-width": 5 }));
+    g.append(svgEl("polygon", { points: flatHexPoints(cx, cy, HEX - 9), fill: "transparent", stroke: FACTION_COLORS[winningColor(s, i)], "stroke-width": 3 }));
+    g.append(svgEl("text", { class: "tnum", x: cx - HEX + 16, y: cy - HEX * SQ3 / 2 + 22 }, String(i)));
+    const pieces = s.territories[i];
+    pieces.forEach((piece, j) => {
+      const perRow = 4, row = Math.floor(j / perRow), col = j % perRow;
+      const rowCount = Math.min(perRow, pieces.length - row * perRow);
+      const px = cx - ((rowCount - 1) * 20) / 2 + col * 20;
+      const py = cy - 8 + row * 20 - (Math.floor((pieces.length - 1) / perRow) * 10) + 8;
+      g.append(svgEl("circle", { cx: px, cy: py, r: 9, fill: FACTION_COLORS[piece], stroke: "rgba(240,231,211,.8)", "stroke-width": 1.5 }));
+    });
+    svg.append(g);
+  });
+  return svg;
+}
+
+/* ============================================================================
+   PAGE
+   ========================================================================= */
+const content = document.getElementById("content");
+
+function renderPasteScreen(err) {
+  const ta = h("textarea", { placeholder: "Paste a Turncoats share code or full link here…" });
+  content.replaceChildren(h("div", { class: "paste" },
+    h("div", {}, "No game found in the URL. Paste a share code to analyze a game:"),
+    err ? h("div", { class: "err" }, "⚠ " + err) : null,
+    ta,
+    h("button", { onclick: () => {
+      let v = ta.value.trim();
+      const m = v.match(/[?&]g=([A-Za-z0-9\-_]+)/);
+      if (m) v = m[1];
+      location.search = "?g=" + encodeURIComponent(v);
+    } }, "Analyze"),
+    h("a", { class: "back", href: "turncoats.html" }, "← back to the game"),
+  ));
+}
+
+function renderAnalysis(hist) {
+  const { frames, finalState } = buildFrames(hist);
+  const N = frames.length;
+  const P = hist.playerCount;
+  const pname = i => `Player ${i + 1} (${SEAT_NAMES[hist.playerTypes[i]] || "?"})`;
+
+  /* ---- verdict ---- */
+  const faction = winningFaction(finalState);
+  const winners = winningPlayers(finalState);
+  const finished = finalState.game_over;
+  const winnerText = !finished ? "Game unfinished"
+    : (faction === "tie" || faction === "green") ? "No one wins"
+    : winners.length === 1 ? `${pname(winners[0])} wins`
+    : `Tie: ${winners.map(i => "Player " + (i + 1)).join(" & ")}`;
+  const swatch = h("div", { class: "swatch" });
+  swatch.style.background = FACTION_COLORS[faction] || "#5d9b6c";
+
+  /* ---- analytics ---- */
+  const leaders = frames.map(f => leaderOf(f.scores));
+  let leadChanges = 0, lastChangeStep = 0;
+  for (let i = 1; i < N; i++)
+    if (leaders[i] !== leaders[i - 1]) { leadChanges++; lastChangeStep = i; }
+  // turning point: largest single-move drop in the eventual winner's share
+  // (or largest swing overall if no single winner)
+  let swingStep = 0, swingMag = 0;
+  const focus = winners.length === 1 ? winners[0] : null;
+  for (let i = 1; i < N; i++) {
+    const mag = focus !== null
+      ? frames[i].scores[focus] - frames[i - 1].scores[focus]
+      : Math.max(...frames[i].scores.map((v, p) => Math.abs(v - frames[i - 1].scores[p])));
+    if (Math.abs(mag) > Math.abs(swingMag)) { swingMag = mag; swingStep = i; }
+  }
+  const battles = hist.moves.filter(m => m.type === "Battle").length;
+  const marches = hist.moves.filter(m => m.type === "March").length;
+  const recruits = hist.moves.filter(m => m.type === "Recruit").length;
+  const negotiates = hist.moves.filter(m => m.type === "Negotiate").length;
+
+  /* ---- win-share stacked chart (the requested timeline) ---- */
+  const winSeries = Array.from({ length: P }, (_, p) => ({
+    color: PLAYER_COLORS[p],
+    values: frames.map(f => f.scores[p]),
+  }));
+  let cur = N - 1;
+  const winChart = stackedChart(winSeries, N, { onScrub: setStep });
+
+  /* ---- faction territory-control stacked chart ---- */
+  const terrKeys = ["red", "skyblue", "black", "green"];
+  const terrSeries = terrKeys.map(f => ({
+    color: FACTION_COLORS[f],
+    values: frames.map(fr => fr.terr[f] / T),
+  }));
+  const terrChart = stackedChart(terrSeries, N, { onScrub: setStep });
+
+  /* ---- scrubber + step detail ---- */
+  const slider = h("input", { type: "range", min: 0, max: N - 1, value: N - 1,
+    oninput: ev => setStep(+ev.target.value) });
+  const stepLabel = h("div", { class: "step-label" });
+  const boardBox = h("div", { class: "board" });
+  const moveDesc = h("div", { class: "move-desc" });
+  const barsBox = h("div", {});
+  const moveRows = [];
+
+  function setStep(i) {
+    cur = i;
+    slider.value = i;
+    winChart.setCursor(i);
+    terrChart.setCursor(i);
+    stepLabel.textContent = i === 0 ? "initial deal" : `move ${i} / ${N - 1}`;
+    boardBox.replaceChildren(renderBoardSVG(frames[i].state));
+    moveDesc.textContent = frames[i].desc + (leaders[i] >= 0 ? ` — ${pname(leaders[i])} leads` : " — dead even");
+    barsBox.replaceChildren(...frames[i].scores.map((v, p) => {
+      const bar = h("div", { class: "bar" });
+      bar.style.width = (v * 100).toFixed(1) + "%";
+      bar.style.background = PLAYER_COLORS[p];
+      return h("div", { class: "bar-row" },
+        h("div", { class: "name" }, pname(p)),
+        h("div", { class: "bar-bg" }, bar),
+        h("div", { class: "pct" }, (v * 100).toFixed(0) + "%"));
+    }));
+    moveRows.forEach((r, k) => r.classList.toggle("cur", k === i));
+  }
+
+  /* ---- move list ---- */
+  const moveList = h("div", { class: "movelist" });
+  frames.forEach((f, i) => {
+    const dot = h("div", { class: "ldr" });
+    dot.style.background = leaders[i] >= 0 ? PLAYER_COLORS[leaders[i]] : "transparent";
+    dot.style.border = leaders[i] >= 0 ? "none" : "1px dashed #8a8170";
+    const row = h("div", { class: "row", onclick: () => setStep(i) },
+      h("div", { class: "n" }, String(i)), dot, h("div", {}, f.desc));
+    moveRows.push(row);
+    moveList.append(row);
+  });
+
+  const legend = h("div", { class: "legend" },
+    ...Array.from({ length: P }, (_, p) => {
+      const dot = h("div", { class: "dot" }); dot.style.background = PLAYER_COLORS[p];
+      return h("div", { class: "key" }, dot, pname(p));
+    }));
+  const terrLegend = h("div", { class: "legend" },
+    ...terrKeys.map(f => {
+      const dot = h("div", { class: "dot" }); dot.style.background = FACTION_COLORS[f];
+      return h("div", { class: "key" }, dot, FACTION_NAMES[f]);
+    }));
+
+  content.replaceChildren(
+    h("div", { class: "section" }, h("div", { class: "panel verdict" },
+      swatch,
+      h("div", {},
+        h("div", { class: "big" }, winnerText),
+        h("div", { class: "small" },
+          `Winning faction: ${FACTION_NAMES[faction] || faction} · ${N - 1} moves · ` +
+          `${recruits} recruits, ${battles} battles, ${marches} marches, ${negotiates} negotiations`)))),
+
+    h("div", { class: "section" },
+      h("h2", {}, "Winning position over time"),
+      h("div", { class: "panel" },
+        winChart.svg, legend,
+        h("div", { class: "scrub-row" }, slider, stepLabel),
+        h("div", { class: "step-detail" },
+          h("div", { class: "facts" }, moveDesc, barsBox),
+          boardBox))),
+
+    h("div", { class: "section" },
+      h("h2", {}, "Territory control by faction"),
+      h("div", { class: "panel" }, terrChart.svg, terrLegend)),
+
+    h("div", { class: "section" },
+      h("h2", {}, "Key numbers"),
+      h("div", { class: "stat-grid" },
+        h("div", { class: "stat" }, h("div", { class: "v" }, String(leadChanges)), h("div", { class: "k" }, "lead changes")),
+        h("div", { class: "stat" }, h("div", { class: "v" }, leadChanges ? `move ${lastChangeStep}` : "—"), h("div", { class: "k" }, "final lead change")),
+        h("div", { class: "stat" }, h("div", { class: "v" }, `move ${swingStep}`), h("div", { class: "k" },
+          (focus !== null ? "winner's biggest swing" : "biggest swing") + ` (${swingMag >= 0 ? "+" : ""}${(swingMag * 100).toFixed(0)}%)`)),
+        h("div", { class: "stat" }, h("div", { class: "v" }, String(frames[N - 1].bagLen)), h("div", { class: "k" }, "stones left in bag")))),
+
+    h("div", { class: "section" },
+      h("h2", {}, "Full timeline (tap a row to view that step)"),
+      h("div", { class: "panel" }, moveList)),
+
+    h("div", { class: "section", style: "text-align:center" },
+      h("a", { class: "back", href: "turncoats.html" }, "← back to the game")),
+  );
+
+  setStep(N - 1);
+  // jump to the turning point on first view? No — end state first; user scrubs.
+}
+
+/* ---- entry ---- */
+(function main() {
+  const params = new URLSearchParams(location.search);
+  const code = params.get("g");
+  if (!code) { renderPasteScreen(null); return; }
+  try {
+    const hist = decodeHistory(code);
+    renderAnalysis(hist);
+  } catch (e) {
+    renderPasteScreen("Could not decode that game: " + e.message);
+  }
+})();
+</script>
+</body>
+</html>
